@@ -6,59 +6,74 @@ import ollama
 from pypdf import PdfReader
 import streamlit as st
 
-# Page Config
+# Streamlit Page Setup
 st.set_page_config(
-    page_title="Syllabify AI - Podcast Studio", page_icon="🎙️", layout="wide"
+    page_title="Syllabify AI - Podcast & Tutor Studio",
+    page_icon="🎙️",
+    layout="wide",
 )
 
-st.title("🎙️ Syllabify AI: Educational Podcast Studio")
-st.write(
-    "Visually Impaired & Dyslexic Students ke liye AI-Powered Learning App"
+st.title("🎙️ Syllabify AI: Accessible Educational Studio PRO")
+st.caption(
+    "Visually Impaired & Dyslexic Students ke liye AI Podcast, Viva Test, aur Assignment Tutor"
 )
 
 
-# Function to extract text from PDF
-def extract_text_from_pdf(uploaded_file):
+# 1. PDF Text Extractor
+def extract_text(uploaded_file):
     reader = PdfReader(uploaded_file)
     text = ""
     for page in reader.pages:
         extracted = page.extract_text()
         if extracted:
             text += extracted + "\n"
-    return text[:2500]
+    return text[:3000]
 
 
-# Gemma Script Generator
-def generate_podcast_script(text_content):
+# 2. Gemma Engine: Podcast + Viva Quiz Generator
+def generate_podcast_and_viva(text_content, language="English"):
+    lang_rule = (
+        "Write in Roman Urdu (e.g. 'Aaj hum yeh parhenge...')"
+        if language == "Roman Urdu"
+        else "Write in English"
+    )
+
     prompt = f"""
-    You are an expert educational podcast scriptwriter for visually impaired students.
-    Convert the following textbook content into a 2-person dialogue script between "Tutor" and "Student".
+    You are an AI Educational Studio engine for visually impaired students.
+    Process the provided text and output a JSON object with:
+    1. "summary": A 2-sentence key takeaway of the text.
+    2. "script": A 2-person educational dialogue (Tutor & Student).
+    3. "viva": 3 interactive viva quiz questions with options, correct answer, and a short explanation.
 
-    Rules:
-    1. Keep it simple, engaging, and conversational.
-    2. Tutor explains concepts using relatable real-world analogies.
-    3. Student asks curious, natural follow-up questions.
-    4. Output MUST strictly be a JSON array of objects with keys "speaker" and "text".
-    5. Do NOT add any markdown fences, intro, or extra text outside JSON.
+    Rule: {lang_rule}
+    Output MUST strictly be valid JSON with no markdown formatting.
 
-    Format Example:
-    [
-      {{"speaker": "Tutor", "text": "Welcome! Today we are learning about how gravity works."}},
-      {{"speaker": "Student", "text": "Is gravity what keeps our feet on the ground?"}},
-      {{"speaker": "Tutor", "text": "Exactly! It acts like an invisible pulling force..."}}
-    ]
+    JSON Structure:
+    {{
+      "summary": "...",
+      "script": [
+        {{"speaker": "Tutor", "text": "..."}},
+        {{"speaker": "Student", "text": "..."}}
+      ],
+      "viva": [
+        {{
+          "question": "...",
+          "options": ["A", "B", "C", "D"],
+          "answer": "Exact matching option text",
+          "explanation": "Why this is correct..."
+        }}
+      ]
+    }}
 
-    Content:
+    Text:
     {text_content}
     """
 
     response = ollama.chat(
-        model="gemma:2b",
-        messages=[{"role": "user", "content": prompt}],
+        model="gemma:2b", messages=[{"role": "user", "content": prompt}]
     )
 
     content = response["message"]["content"].strip()
-
     if content.startswith("```"):
         content = content.split("```")[1]
         if content.startswith("json"):
@@ -67,22 +82,74 @@ def generate_podcast_script(text_content):
     return json.loads(content)
 
 
-# Dual Voice Generator
-async def generate_audio(script, output_filename="podcast.mp3"):
-    TUTOR_VOICE = "en-US-GuyNeural"
-    STUDENT_VOICE = "en-US-AnaNeural"
+# 3. Gemma Engine: Assignment Solver & Tutor Explanation
+def solve_assignment(assignment_text, language="English"):
+    lang_rule = (
+        "Explain step-by-step in Roman Urdu"
+        if language == "Roman Urdu"
+        else "Explain step-by-step in clear English"
+    )
+
+    prompt = f"""
+    You are a supportive AI Tutor helping a blind or dyslexic student with their assignment.
+    Solve the assignment question provided, break down the step-by-step solution, and provide a clear explanation that can be converted to speech.
+
+    Rule: {lang_rule}
+
+    Format Output as JSON:
+    {{
+      "solution_text": "Detailed step-by-step solution and answer...",
+      "audio_script": "Tutor audio response explaining how to solve this step-by-step..."
+    }}
+
+    Assignment Question/Text:
+    {assignment_text}
+    """
+
+    response = ollama.chat(
+        model="gemma:2b", messages=[{"role": "user", "content": prompt}]
+    )
+
+    content = response["message"]["content"].strip()
+    if content.startswith("```"):
+        content = content.split("```")[1]
+        if content.startswith("json"):
+            content = content[4:].strip()
+
+    return json.loads(content)
+
+
+# 4. Audio Generator (Supports Dual Voice & Single Tutor Voice)
+async def generate_audio(
+    script,
+    language="English",
+    output_filename="podcast.mp3",
+    single_voice=False,
+):
+    tutor_v = (
+        "ur-PK-AsadNeural" if language == "Roman Urdu" else "en-US-GuyNeural"
+    )
+    student_v = (
+        "ur-PK-UzmaNeural" if language == "Roman Urdu" else "en-US-AnaNeural"
+    )
 
     os.makedirs("temp_chunks", exist_ok=True)
     audio_bytes = []
 
+    if single_voice:
+        # For Assignment Explanation
+        comm = edge_tts.Communicate(script, tutor_v)
+        await comm.save(output_filename)
+        return
+
     for idx, line in enumerate(script):
         speaker = line.get("speaker", "Tutor")
         text = line.get("text", "")
-        voice = TUTOR_VOICE if speaker.lower() == "tutor" else STUDENT_VOICE
+        voice = tutor_v if speaker.lower() == "tutor" else student_v
 
         chunk_path = f"temp_chunks/chunk_{idx}.mp3"
-        communicate = edge_tts.Communicate(text, voice)
-        await communicate.save(chunk_path)
+        comm = edge_tts.Communicate(text, voice)
+        await comm.save(chunk_path)
 
         with open(chunk_path, "rb") as f:
             audio_bytes.append(f.read())
@@ -92,39 +159,119 @@ async def generate_audio(script, output_filename="podcast.mp3"):
             f.write(chunk)
 
 
-# UI Layout
-uploaded_pdf = st.file_uploader("PDF File Upload Karein", type=["pdf"])
-text_input = st.text_area("Ya Direct Text Paste Karein:", height=150)
+# ---------------- APP LAYOUT ----------------
 
-final_text = ""
-if uploaded_pdf:
-    final_text = extract_text_from_pdf(uploaded_pdf)
-    st.success("PDF Read Ho Gaya!")
-elif text_input:
-    final_text = text_input
+app_mode = st.sidebar.radio(
+    "Select Mode / Feature:",
+    ["🎙️ Syllabus-to-Podcast & Viva", "📝 Assignment AI Solver"],
+)
+language = st.sidebar.selectbox("Language:", ["English", "Roman Urdu"])
 
-if st.button("🚀 Generate Podcast"):
-    if not final_text.strip():
-        st.warning("Pehle PDF upload karein ya text likhein!")
-    else:
-        with st.spinner("Gemma Script Bana Raha Hai..."):
-            try:
-                script = generate_podcast_script(final_text)
+# MODE 1: PODCAST & VIVA TEST
+if app_mode == "🎙️ Syllabus-to-Podcast & Viva":
+    st.header("🎙️ Chapter Podcast & Live Viva Test")
 
-                st.subheader("📜 Generated Script")
-                for line in script:
-                    speaker = line.get("speaker", "Tutor")
-                    text = line.get("text", "")
-                    if speaker.lower() == "tutor":
-                        st.markdown(f"👨‍🏫 **Tutor:** {text}")
+    uploaded_pdf = st.file_uploader("Upload Chapter PDF", type=["pdf"])
+    raw_text = st.text_area("Or Paste Text Here:", height=150)
+
+    input_data = ""
+    if uploaded_pdf:
+        input_data = extract_text(uploaded_pdf)
+    elif raw_text:
+        input_data = raw_text
+
+    if st.button("🚀 Process Podcast & Viva Package", type="primary"):
+        if not input_data.strip():
+            st.warning("Please upload a PDF or paste text first!")
+        else:
+            with st.spinner("Gemma is generating podcast script & viva..."):
+                try:
+                    data = generate_podcast_and_viva(input_data, language)
+                    st.session_state["studio_data"] = data
+
+                    asyncio.run(
+                        generate_audio(
+                            data["script"], language, "podcast_audio.mp3"
+                        )
+                    )
+                    st.success("✅ Package Ready!")
+                except Exception as e:
+                    st.error(f"Error: {e}")
+
+    if "studio_data" in st.session_state:
+        data = st.session_state["studio_data"]
+
+        st.info(f"📌 **Audio Summary:** {data.get('summary', '')}")
+        st.audio("podcast_audio.mp3")
+
+        tab1, tab2 = st.tabs(["📜 Dialogue Script", "🎓 Interactive Viva Test"])
+
+        with tab1:
+            for line in data.get("script", []):
+                spk = line.get("speaker", "Tutor")
+                txt = line.get("text", "")
+                st.markdown(
+                    f"**{'👨‍🏫 Tutor' if spk.lower() == 'tutor' else '🧑‍🎓 Student'}:** {txt}"
+                )
+
+        with tab2:
+            st.write("### 🎓 Test Your Knowledge (Viva Mode):")
+            for i, q in enumerate(data.get("viva", [])):
+                st.markdown(f"**Question {i+1}: {q.get('question')}**")
+                ans = st.radio(
+                    f"Select Answer Q{i+1}:",
+                    q.get("options", []),
+                    key=f"viva_{i}",
+                )
+                if st.button(f"Submit Answer Q{i+1}"):
+                    if ans == q.get("answer"):
+                        st.success("Correct! 🎉 " + q.get("explanation", ""))
                     else:
-                        st.markdown(f"🧑‍🎓 **Student:** {text}")
+                        st.error(
+                            f"Incorrect! Correct answer is: {q.get('answer')}. {q.get('explanation', '')}"
+                        )
 
-                with st.spinner("Audio Banti Ho..."):
-                    asyncio.run(generate_audio(script, "final_podcast.mp3"))
+# MODE 2: ASSIGNMENT SOLVER
+else:
+    st.header("📝 Assignment Step-by-Step Solver & Audio Explanation")
 
-                st.success("🎉 Podcast Ready!")
-                st.audio("final_podcast.mp3", format="audio/mp3")
+    assign_pdf = st.file_uploader("Upload Assignment PDF", type=["pdf"])
+    assign_text = st.text_area("Or Paste Question/Assignment Text:", height=150)
 
-            except Exception as e:
-                st.error(f"Error Aaya: {e}")
+    a_input = ""
+    if assign_pdf:
+        a_input = extract_text(assign_pdf)
+    elif assign_text:
+        a_input = assign_text
+
+    if st.button("💡 Solve & Generate Audio Explanation", type="primary"):
+        if not a_input.strip():
+            st.warning("Please enter your assignment question!")
+        else:
+            with st.spinner(
+                "Gemma is solving the assignment and generating audio..."
+            ):
+                try:
+                    result = solve_assignment(a_input, language)
+                    st.session_state["assign_result"] = result
+
+                    asyncio.run(
+                        generate_audio(
+                            result.get("audio_script", ""),
+                            language,
+                            "assignment_audio.mp3",
+                            single_voice=True,
+                        )
+                    )
+                    st.success("✅ Assignment Solved!")
+                except Exception as e:
+                    st.error(f"Error: {e}")
+
+    if "assign_result" in st.session_state:
+        res = st.session_state["assign_result"]
+
+        st.subheader("🔊 Audio Explanation for Visually Impaired Students:")
+        st.audio("assignment_audio.mp3")
+
+        st.subheader("📖 Detailed Written Solution:")
+        st.write(res.get("solution_text", ""))
